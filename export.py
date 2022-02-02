@@ -3,6 +3,7 @@
 ---- ROLE: Defines 3MF-related utils (to_file_3mf, to_timestamped_file_3mf, write_3mf_to_zip)
 """
 
+import pickle
 import random
 from itertools import product
 from typing import Any
@@ -74,7 +75,7 @@ def _file_chunk(formatted_string: str) -> str:
 def to_timestamped_file_3mf(
     placed_package_list: PlacedPackageList, folder="", id: Any = None
 ) -> str:
-    """[summary]
+    """Generates a 3MF file with a timestamp as its name.
 
     Args:
         placed_package_list (PlacedPackageList): The PlacedPackageList instance to save
@@ -102,7 +103,7 @@ def to_timestamped_file_3mf(
 
 
 @display_info
-def write_3mf_to_zip(file_path: str, model: str) -> None:
+def write_3mf_to_zip(file_path: str, model: str, debug: bool = False) -> None:
     """Writes a 3MF model, passed as its XML string (the string of the model itself, not of a
     file containing it), and saves it to a ZIP file, as the file 3dmodel.model in the folder
     3D, as per convention. Force-logs the result of the writing of the file.
@@ -116,8 +117,7 @@ def write_3mf_to_zip(file_path: str, model: str) -> None:
             file_3mf.writestr("3D/3dmodel.model", model)
         logger.info(f"Successfully saved 3mf model to '{file_path}'")
     except IOError as err:
-        logger.critical(
-            f"Could not save 3mf model to '{file_path}'. Error: {err}")
+        logger.critical(f"Could not save 3mf model to '{file_path}'. Error: {err}")
 
 
 def to_file_3mf(file_path, placed_package_list: PlacedPackageList) -> None:
@@ -131,7 +131,7 @@ def to_file_3mf(file_path, placed_package_list: PlacedPackageList) -> None:
     """
     packages = placed_package_list.packages
 
-    # NOTE: All strings of the XML model are prepended with a newline and do not end with a newline
+    # All strings of the XML model are prepended with a newline and do not end with a newline
     # so the strings multiline strings are readable with the same amount of whitespace as they will
     # appear in the XML string generated.
 
@@ -218,3 +218,44 @@ def to_file_3mf(file_path, placed_package_list: PlacedPackageList) -> None:
     )
 
     write_3mf_to_zip(file_path, model)
+
+
+def to_timestamped_file_pickle(
+    placed_package_list: PlacedPackageList, folder="", id: Any = None
+) -> str:
+    """Generates a pickle file with a timestamp as its name.
+
+    Args:
+        placed_package_list (PlacedPackageList): The PlacedPackageList instance to save
+        to a pickle file.
+        folder (str, optional): Subfolder path in which to save the file. Defaults to "".
+        id (Any, optional): A stringifiable identifier; if none, isn't included in
+        new file path. Defaults to None.
+
+    Returns:
+        str: Generated timestamped file path.
+    """
+    if id is None:
+        file_path = os.path.join(
+            folder, f"{datetime.now().strftime('%d%m%Y_%H-%M-%S')}.pickle"
+        )
+    else:
+        # Don't include seconds in file path if no ID is passed.
+        # (it is assumed that no two runs with the same ID will finish within the same minute)
+        file_path = os.path.join(
+            folder, f"{id}_{datetime.now().strftime('%d%m%Y_%H-%M')}.pickle"
+        )
+
+    to_file_pickle(file_path, placed_package_list)
+    return file_path
+
+
+def to_file_pickle(file_path: str, placed_package_list: PlacedPackageList) -> None:
+    """Saves a PlacedPackageList instance to a pickle file.
+
+    Args:
+        file_path (str): Path of the pickle file to be written.
+        placed_package_list (PlacedPackageList): PlacedPackageList instance to be saved.
+    """
+    with open(file_path, "wb") as file_pickle:
+        pickle.dump(placed_package_list, file_pickle)

@@ -36,7 +36,7 @@ class CustomFormatter(logging.Formatter):
         Returns:
             str: The formatted string returned by the newly constructed Formatter.
         """
-        return logging.Formatter(self.FORMATS[record.levelno]).format(record)
+        return logging.Formatter(FORMATS[record.levelno]).format(record)
 
 
 def change_log_level(log_level: str) -> None:
@@ -71,10 +71,15 @@ def display_info(f: Callable) -> Callable:
     Args:
         f (Callable): A function in which the log level of logger will be force-set to INFO.
     """
-    def custom_f(*args):
-        change_log_level("INFO")
-        output = f(*args)
-        change_log_level(LOG_LEVEL)
+
+    def custom_f(*args, **kwargs):
+        if kwargs.get("debug", False):
+            change_log_level("INFO")
+            output = f(*args, **kwargs)
+            change_log_level(LOG_LEVEL)
+        else:
+            output = f(*args, **kwargs)
+
         return output
 
     return custom_f

@@ -8,14 +8,23 @@ import os
 
 from typing import Union, Callable
 
-from generate_3mf import to_timestamped_file_3mf
+from export import to_timestamped_file_pickle
 from logger import display_info, logger
-from constants import DIMS, INIT_COORDS, PERMUTATIONS
-from package import Package, product, PackageList, PlacedPackage, PlacedPackageList
-from render import render_3mf, save_and_render
+from constants import DIMS, INIT_COORDS, PERMUTATIONS, CONSTRAINTS
+from package import (
+    STACKING_TOLERANCE,
+    Package,
+    product,
+    PackageList,
+    PlacedPackage,
+    PlacedPackageList,
+)
+from render import render_3mf, save_and_render, view_step_by_step
+from utils import intersects
 
 
-def IDENTITY(X): return X
+def IDENTITY(X):
+    return X
 
 
 class Container:
@@ -23,7 +32,7 @@ class Container:
     A Container instance has given dimensions and keeps track of a linked PlacedPackageList.
 
     Attributes:
-        dims (tuple[float, float, float]): The starting Container dimensions.
+        dims (tuple[(float,) * DIMS]): The starting Container dimensions.
         volume (float): The volume calculated from the Container's dims.
         current_packages (PlacedPackageList): The list of Package instances
         currently placed in the Container.
@@ -33,7 +42,7 @@ class Container:
         """Container constructor method.
 
         Args:
-            dims (tuple[float, float, float]): The starting Container dimensions.
+            dims (tuple[(float,) * DIMS]): The starting Container dimensions.
         """
         self.dims = dims
         self.volume = product(dims)
@@ -41,7 +50,7 @@ class Container:
 
     def refresh(self) -> None:
         """Resets the current_packages PlacePackageList attribute."""
-        self.current_packages = PlacedPackageList()
+        self.current_packages = PlacedPackageList(self.dims)
 
     def intersects_outside(
         self, min_coords: "tuple[(float,) * DIMS]", max_coords: "tuple[(float,) * DIMS]"
@@ -50,9 +59,9 @@ class Container:
         coordinates 'max_coords') intersects with the outside of the Container.
 
         Args:
-            min_coords (tuple[float, float, float]): start coordinates of a Package instance
+            min_coords (tuple[(float,) * DIMS]): start coordinates of a Package instance
             (i.e. corner with smallest coordinates).
-            max_coords (tuple[float, float, float]): end coordinates of a Package instace
+            max_coords (tuple[(float,) * DIMS]): end coordinates of a Package instace
             (i.e. corner with largest coordinates).
 
         Returns:
@@ -74,6 +83,15 @@ class Container:
         Returns:
             bool: Whether placing_package can be placed with the Container.
         """
+
+        if any(
+            intersects(
+                placing_package.min_coords, placing_package.max_coords, *constraint
+            )
+            for constraint in CONSTRAINTS
+        ):
+            return False
+
         if self.current_packages.any_intersect(
             placing_package.min_coords, placing_package.max_coords
         ):
@@ -138,7 +156,7 @@ class ContainerFiller:
         amongst the packages left to be placed (i.e. package with the smallest length
         in a given dimension).
 
-        available_corners (list[tuple[float, float, float]]): The list of corners (represented
+        available_corners (list[tuple[(float,) * DIMS]]): The list of corners (represented
         by tuples of coordinates) that are currently available (for a package to be fitted into).
     """
 
@@ -162,13 +180,20 @@ class ContainerFiller:
         its linked Container)."""
         self.iter_start = None
         self.iter_end = None
+
+        self.debug = False
+
         self.packages_to_put = self._base_packages.copy()
         self.packages_not_placed = PackageList()
+
         self.smallest_packages = self.packages_to_put.find_smallest()
+
         self.available_corners: "list[tuple[(float,) * DIMS]]" = [INIT_COORDS]
         self.container.refresh()
 
-    def place_package(self, placing_package: PlacedPackage) -> Union[None, PlacedPackage]:
+    def place_package(
+        self, placing_package: PlacedPackage
+    ) -> Union[None, PlacedPackage]:
         """Tries to place a PlacedPackage that was instantiated with a given corner.
         If the PlacedPackage can be placed, remove the corner where it was placed from the list of
         available corners and add its 3 available corners to the available_corners list, then
@@ -184,26 +209,64 @@ class ContainerFiller:
         if self.container.place_package(placing_package):
             self.available_corners.remove(placing_package.min_coords)
             self.add_corners(placing_package)
+
+            # If debug is enabled, add a copy of the current corners list to the corner_history
+            if self.debug:
+                self.container.current_packages.corner_history.append(
+                    list(self.available_corners)
+                )
+
             return placing_package
 
         return None
 
-    # NOTE: Experiment with "negative relative positioning" on corner ?
-    def can_package_fit(self, package: Package, corner: "tuple[(float,)* DIMS]") -> bool:
+    # NOTE: Experiment with "negative relative positioning" on corner (e.g. sliding a package back
+    # on a corner as much as it can fit)?
+    def can_package_fit(
+        self, package: Package, corner: "tuple[(float,)* DIMS]"
+    ) -> bool:
         """Checks whether a Package can fit on a given corner (with any possible rotation).
 
         Args:
             package (Package): The Package to try to fit on the given corner.
-            corner (tuple[float, float, float]): The given corner where the package will be fitted.
+            corner (tuple[(float,) * DIMS]): The given corner where the package will be fitted.
 
         Returns:
             bool: Whether the Package fits on the corner with any rotation.
         """
         return any(
-            self.container.can_be_placed(
-                PlacedPackage(package, corner, rotation))
+            self.container.can_be_placed(PlacedPackage(package, corner, rotation))
             for rotation in PERMUTATIONS
         )
+
+    def is_valid_corner(
+        self, corner: "tuple[(float,)* DIMS]", stacked_on_top=False
+    ) -> bool:
+        """Checks whether a corner is a valid corner (i.e. a corner where a package can be placed).
+
+        Args:
+            corner (tuple[(float,)* DIMS]): The corner to be checked.
+
+        Returns:
+            bool: Whether the corner is a valid corner.
+        """
+
+        # NOTE: gravity-breaking corners might be coherent if a package is added afterwards?
+
+        # Ignore a corner put on the ground or on top of the current package
+        if corner[2] > STACKING_TOLERANCE and not stacked_on_top:
+            # Checks if the corner stacks on any other corner
+            if not self.container.current_packages.stacks_on_any_package(corner):
+                return False
+
+        # Only add corner if one of the smallest packages can fit on it
+        # (otherwise, the corner is pointless)
+        if any(
+            self.can_package_fit(package, corner)
+            for package in self.smallest_packages.values()
+        ):
+            return True
+        return False
 
     def add_corners(self, placed_package: PlacedPackage) -> None:
         """Adds the new corners of a PlacedPackage placed within the container.
@@ -211,29 +274,19 @@ class ContainerFiller:
         Args:
             placed_package (PlacedPackage): A PlacedPackage that was just placed in the Container.
         """
-        # Only add corner if smallest packages can fit
+
         def add_at_idx(tup, idx, val):
             return tuple(tup[i] + val if i == idx else tup[i] for i in range(len(tup)))
 
         for i in range(DIMS):
-            corner = add_at_idx(placed_package.min_coords,
-                                i, placed_package.dims[i])
-
-            # NOTE: gravity-breaking corners might be coherent if a package is added afterwards ?
-            if i != 1:
-                if not self.container.current_packages.any_can_stack(corner):
-                    continue
-
-            # Only add corner if one of the smallest packages can fit on it
-            # (otherwise, the corner is pointless)
-            if any(
-                self.can_package_fit(package, corner)
-                for package in self.smallest_packages.values()
-            ):
+            corner = add_at_idx(placed_package.min_coords, i, placed_package.dims[i])
+            if self.is_valid_corner(corner, i == 2):
                 self.available_corners.append(corner)
 
     @display_info
-    def _stats(self, run_name="") -> 'dict[str, Union[float, str]]':
+    def _stats(
+        self, run_name: str = "", debug: bool = False
+    ) -> "dict[str, Union[float, str]]":
         """Shows the relevant statistics related to a run of the main loop of ContainerFiller.
         Returns the statistics as a dictionary.
 
@@ -274,8 +327,7 @@ class ContainerFiller:
 
         logger.info(f"Run name: {results['Run']}")
         logger.info(f"Total iteration time: {results['Time']}s")
-        logger.info(
-            f"Placed: {results['Placed N']} ({results['Placed Vol']}) cm³")
+        logger.info(f"Placed: {results['Placed N']} ({results['Placed Vol']}) cm³")
         logger.info(
             f"Remains: {results['Remaining N']} ({results['Remaining Vol']} cm³)"
         )
@@ -285,8 +337,11 @@ class ContainerFiller:
         return results
 
     def loop_3CH(
-        self, init_sorting_heuristic: Callable = IDENTITY,
-        corner_sorting_heuristic: Callable = IDENTITY
+        self,
+        init_sorting_heuristic: Callable = IDENTITY,
+        corner_sorting_heuristic: Callable = IDENTITY,
+        type_permutation_heuristic: list = None,
+        debug: bool = False,
     ) -> None:
         """The core loop of ContainerFiller, implementing the Three Corners Heuristic algorithm.
         Takes sorting heuristics as arguments, calculates the duration of an iteration, and
@@ -302,37 +357,59 @@ class ContainerFiller:
             Defaults to the identity function.
         """
         self.iter_start = time.perf_counter()
-        try:
-            _list = list(
-                sorted(list(self._base_packages.values()),
-                       key=init_sorting_heuristic)
-            )
-
-        except Exception as err:
-            logger.critical(
-                "init_sorting_heuristic is not a correct sorting function!")
-            logger.critical(err)
-            return
 
         # Initial package order sorting heuristic
+        if type_permutation_heuristic is None:
+            try:
+                _list = list(
+                    sorted(
+                        list(self._base_packages.values()), key=init_sorting_heuristic
+                    )
+                )
+
+            except Exception as err:
+                logger.critical(
+                    "init_sorting_heuristic is not a correct sorting function!"
+                )
+                logger.critical(err)
+                return
+
+        else:
+            try:
+                _list = list(
+                    sorted(
+                        list(self._base_packages.values()),
+                        key=lambda pkg: (
+                            type_permutation_heuristic.index(pkg.type),
+                            -pkg.volume,
+                        ),
+                    )
+                )
+
+            except Exception as err:
+                logger.critical(
+                    "type_permutation_heuritstic is not a correct permutation!"
+                )
+                logger.critical(err)
+                return
+
         for package in _list:
             _id = package.id
             if _id in self.packages_to_put:
                 placed = False
-                logger.warning(
-                    f"No. of corners: {len(self.available_corners)}")
+                logger.warning(f"No. of corners: {len(self.available_corners)}")
                 logger.debug(f"Available corners: {self.available_corners}")
+
+                # Corner sorting heuristic
                 for corner in list(
-                    sorted(self.available_corners,
-                           key=corner_sorting_heuristic)
+                    sorted(self.available_corners, key=corner_sorting_heuristic)
                 ):
                     for rotation in PERMUTATIONS:
                         logger.debug(
                             f"Placing: {package}, Corner: {corner}, Rot: {rotation}"
                         )
                         if (
-                            self.place_package(PlacedPackage(
-                                package, corner, rotation))
+                            self.place_package(PlacedPackage(package, corner, rotation))
                             is not None
                         ):
                             placed = True
@@ -342,7 +419,7 @@ class ContainerFiller:
                         logger.info(f"Placed {package} at {corner}!")
                         break
 
-                self.packages_to_put.remove(package.id)
+                self.packages_to_put.pop(package.id)
 
                 # Recalculate smallest packages each time a smallest package is placed
                 if package.id in self.smallest_packages:
@@ -367,7 +444,7 @@ class ContainerFiller:
                     for remaining_id in list(self.packages_to_put.keys()):
                         if package.larger_than(self._base_packages[remaining_id].dims):
                             n_removed += 1
-                            self.packages_to_put.remove(remaining_id)
+                            self.packages_to_put.pop(remaining_id)
                             self.packages_not_placed.add(
                                 self._base_packages[remaining_id]
                             )
@@ -382,9 +459,14 @@ class ContainerFiller:
         ContainerFiller.RUN_ID += 1
 
     def full_iteration_with_heuristics(
-        self, stats=True, save=True, render=True,
-        heuristics: 'dict[str, Callable]' = {}, run_name=""
-    ) -> 'Union[None, dict[str, Union[float, str]]]':
+        self,
+        stats=True,
+        save=True,
+        render=True,
+        debug=False,
+        heuristics: "dict[str, Callable]" = {},
+        run_name="",
+    ) -> "Union[None, dict[str, Union[float, str]]]":
         """Executes all methods related to an iteration, including the main loop with the passed
         heuristics, the 3MF converter and rendered, as well as the stats function.
         Returns the statistics of the run if save is set to True.
@@ -412,21 +494,35 @@ class ContainerFiller:
             Union[None, dict[str, Union[float, str]]]: Results of a given iteration (see _stats),
             if save is set to True; otherwise returns None.
         """
+        self.debug = debug
+
         init_sorting = heuristics.get("init_sorting")
         corner_sorting = heuristics.get("corner_sorting")
+        type_permutation = heuristics.get("type_permutation")
 
         self.loop_3CH(
             init_sorting if init_sorting is not None else IDENTITY,
-            corner_sorting if init_sorting is not None else IDENTITY,
+            corner_sorting if corner_sorting is not None else IDENTITY,
+            type_permutation,
+            debug=debug,
         )
+
+        if stats:
+            results = self._stats(run_name)
+        else:
+            results = None
+
+        if debug:
+            view_step_by_step(self.container.current_packages)
+            print()
+
         if save and render:
             save_and_render(
                 self.container.current_packages, f"{run_name}_{ContainerFiller.RUN_ID}"
             )
-            print()
 
         elif save or render:
-            file_path = to_timestamped_file_3mf(
+            file_path = to_timestamped_file_pickle(
                 self.container.current_packages,
                 "scenes" if save else "temp",
                 f"{run_name}_{ContainerFiller.RUN_ID}",
@@ -436,12 +532,6 @@ class ContainerFiller:
 
             if not save:
                 os.remove(file_path)
-
-        if stats:
-            results = self._stats(run_name)
-            print()
-        else:
-            results = None
 
         self.refresh()
         return results
