@@ -100,8 +100,24 @@ def test_all_heuristics(
     container_filler = ContainerFiller(container, packages)
 
     results = []
-    PRINT_STEP_EVERY = 50000
+    PRINT_STEP_EVERY = 1 if not permutation_heuristics else 50000
     start_time = datetime.now()
+
+    @display_info
+    def print_step(
+        i: int, start: datetime, total: int, current_heuristic: str, debug: bool = False
+    ) -> None:
+        if i % PRINT_STEP_EVERY == 0:
+            if i > 0:
+                s = (datetime.now() - start).total_seconds()
+                logger.info(
+                    f"Time taken: {int(s // 3600):02}:{int(s % 3600 // 60):02}:{int(s % 60):02}"
+                )
+
+            percent_done = f"({((i+1)/total)*100:.4f}%)"
+            logger.info(
+                f"Iteration: {i+1:,} / {total:,} {percent_done} {current_heuristic}"
+            )
 
     if permutation_heuristics:
 
@@ -115,21 +131,6 @@ def test_all_heuristics(
             return type_permutations, total_iterations
 
         type_permutations, total_iterations = init(debug=debug)
-
-        @display_info
-        def print_step(i: int, debug: bool = False):
-            if i % PRINT_STEP_EVERY == 0:
-                if i > 0:
-                    s = (datetime.now() - start_time).total_seconds()
-                    logger.info(
-                        f"Time taken: {int(s // 3600):02}:{int(s % 3600 // 60):02}:{int(s % 60):02}"
-                    )
-
-                current_heuristic = f"{type_permutation}+{corner_heuristic}"
-                percent_done = f"({((i+1)/total_iterations)*100:.4f}%)"
-                logger.info(
-                    f"Iteration: {i+1:,} / {total_iterations:,} {percent_done} {current_heuristic}"
-                )
 
         step = 0
         for type_permutation in type_permutations:
@@ -149,7 +150,13 @@ def test_all_heuristics(
                     )
                 )
                 if debug:
-                    print_step(step, debug=debug)
+                    print_step(
+                        step,
+                        start_time,
+                        total_iterations,
+                        f"{type_permutation}+{corner_heuristic}",
+                        debug=debug,
+                    )
 
                 if step % PRINT_STEP_EVERY == 0:
                     start_time = datetime.now()
@@ -158,7 +165,7 @@ def test_all_heuristics(
 
         @display_info
         def init(debug: bool = False):
-            logger.info("Generating permutations...")
+            logger.info("Calculatings steps...")
             total_iterations = len(INIT_SORTING_HEURISTICS) * len(
                 CORNER_SORTING_HEURISITCS
             )
@@ -166,21 +173,6 @@ def test_all_heuristics(
             return total_iterations
 
         total_iterations = init(debug=debug)
-
-        @display_info
-        def print_step(i: int, debug: bool = False):
-            if i % PRINT_STEP_EVERY == 0:
-                if i > 0:
-                    s = (datetime.now() - start_time).total_seconds()
-                    logger.info(
-                        f"Time taken: {int(s // 3600):02}:{int(s % 3600 // 60):02}:{int(s % 60):02}"
-                    )
-
-                current_heuristic = f"{init_heuristic}+{corner_heuristic}"
-                percent_done = f"({((i+1)/total_iterations)*100:.4f}%)"
-                logger.info(
-                    f"Iteration: {i+1:,} / {total_iterations:,} {percent_done} {current_heuristic}"
-                )
 
         step = 0
         for init_heuristic in INIT_SORTING_HEURISTICS:
@@ -201,7 +193,13 @@ def test_all_heuristics(
                 )
 
                 if debug:
-                    print_step(step, debug=debug)
+                    print_step(
+                        step,
+                        start_time,
+                        total_iterations,
+                        f"{init_heuristic}+{corner_heuristic}",
+                        debug=debug,
+                    )
 
                 if step % PRINT_STEP_EVERY == 0:
                     start_time = datetime.now()
@@ -291,8 +289,7 @@ for example in [example_1, example_2]:
     test_all_heuristics(*example, debug=True)
 
     # Tests all permutations heuristics
-    # test_all_heuristics(*example, permutation_heuristics=True, debug=True)
-
+    test_all_heuristics(*example, permutation_heuristics=True, debug=True)
 
 # Test a specific heuristic combination for example one.
 # run_with_heuristics(

@@ -3,6 +3,7 @@
 ---- ROLE: Defines logger-related utils (logger variable, display_info decorator)
 """
 
+from datetime import datetime
 import logging
 from typing import Callable
 from yachalk import chalk
@@ -54,10 +55,17 @@ def change_log_level(log_level: str) -> None:
 # The shared custom logger in the project folder
 logger = logging.getLogger(APP_NAME)
 
-# StreamHandler used to set the custom formatting
+# StreamHandler (on sys.error) used to set the custom formatting
 ch = logging.StreamHandler()
 ch.setFormatter(CustomFormatter())
+
+# FileHandler on custom log file (default name is <current_datetime>.log)
+log_file = logging.FileHandler(
+    f'logs/{datetime.now().strftime("%d-%m-%Y %H-%M-%S")}.log'
+)
+
 logger.addHandler(ch)
+logger.addHandler(log_file)
 
 # Sets the log level of logger to a custom default
 LOG_LEVEL = "CRITICAL"
@@ -65,7 +73,7 @@ change_log_level(LOG_LEVEL)
 
 
 def display_info(f: Callable) -> Callable:
-    """Decorator uesd to force the log level of logger to INFO within the context of a function.
+    """Decorator used to force the log level of logger to INFO within the context of a function.
     The log level of logger is then reset back to LOG_LEVEL.
 
     Args:
