@@ -3,6 +3,9 @@
 ---- ROLE: Runs the 3CH algorithm on given examples
 """
 
+from multiprocessing import Manager, Process
+import json
+
 from typing import Union
 from container import IDENTITY, Container, ContainerFiller
 from package import PackageList
@@ -100,7 +103,7 @@ def test_all_heuristics(
     container_filler = ContainerFiller(container, packages)
 
     results = []
-    PRINT_STEP_EVERY = 1 if not permutation_heuristics else 50000
+    PRINT_STEP_EVERY = 1 if not permutation_heuristics else 1000
     start_time = datetime.now()
 
     @display_info
@@ -125,42 +128,54 @@ def test_all_heuristics(
         def init(debug: bool = False):
             logger.info("Generating permutations...")
             type_permutations = package_type_permutations(packages.package_types)
-            total_iterations = len(type_permutations) * len(CORNER_SORTING_HEURISITCS)
+            total_iterations = len(type_permutations)
             logger.info(f"{len(type_permutations):,} permutations will be tested")
             logger.info(f"Total iterations: {total_iterations:,}")
             return type_permutations, total_iterations
 
         type_permutations, total_iterations = init(debug=debug)
 
-        step = 0
-        for type_permutation in type_permutations:
-            for corner_heuristic in CORNER_SORTING_HEURISITCS:
-                results.append(
-                    container_filler.full_iteration_with_heuristics(
-                        save=False,
-                        render=False,
-                        debug=debug_each_heuristic,
-                        heuristics={
-                            "type_permutation": type_permutation,
-                            "corner_sorting": CORNER_SORTING_HEURISITCS[
-                                corner_heuristic
-                            ],
-                        },
-                        run_name=f"{type_permutation}+{corner_heuristic}",
-                    )
-                )
-                if debug:
-                    print_step(
-                        step,
-                        start_time,
-                        total_iterations,
-                        f"{type_permutation}+{corner_heuristic}",
-                        debug=debug,
-                    )
+        def run_heuristic(arr, i, type_permutation):
+            start_time = datetime.now()
 
-                if step % PRINT_STEP_EVERY == 0:
-                    start_time = datetime.now()
-                step += 1
+            best = None
+
+            if debug:
+                print_step(i, start_time, total_iterations, "", debug=debug)
+
+            for corner_heuristic in CORNER_SORTING_HEURISITCS:
+
+                result = container_filler.full_iteration_with_heuristics(
+                    save=False,
+                    render=False,
+                    debug=debug_each_heuristic,
+                    heuristics={
+                        "type_permutation": type_permutation,
+                        "corner_sorting": CORNER_SORTING_HEURISITCS[corner_heuristic],
+                    },
+                    run_name=f"{type_permutation}+{corner_heuristic}",
+                )
+
+                if best is None or result["Placed ratio"] > best["Placed ratio"]:
+                    best = result
+
+            if debug:
+                print_step(i, start_time, total_iterations, "", debug=debug)
+
+            arr[i] = json.dumps(best)
+
+        arr = Manager().list(["" for _ in range(total_iterations)])
+
+        p = []
+        for i, type_permutation in enumerate(type_permutations):
+            p.append(Process(target=run_heuristic, args=(arr, i, type_permutation)))
+            p[i].start()
+
+        for q in p:
+            q.join()
+
+        results = [json.loads(arr[i]) for i in range(total_iterations)]
+
     else:
 
         @display_info
@@ -286,7 +301,7 @@ example_2 = (
 
 for example in [example_1, example_2]:
     # Tests all INIT_SORTING and CORNER_SORTING heuristic combinations
-    test_all_heuristics(*example, debug=True)
+    # test_all_heuristics(*example, debug=True)
 
     # Tests all permutations heuristics
     test_all_heuristics(*example, permutation_heuristics=True, debug=True)
