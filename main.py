@@ -103,7 +103,7 @@ def test_all_heuristics(
     container_filler = ContainerFiller(container, packages)
 
     results = []
-    PRINT_STEP_EVERY = 1 if not permutation_heuristics else 1000
+    PRINT_STEP_EVERY = 1 if not permutation_heuristics else 500
     start_time = datetime.now()
 
     @display_info
@@ -134,6 +134,8 @@ def test_all_heuristics(
             return type_permutations, total_iterations
 
         type_permutations, total_iterations = init(debug=debug)
+
+        MAX_CONCURRENT_PROCESSES = 16
 
         def run_heuristic(arr, i, type_permutation):
             start_time = datetime.now()
@@ -166,13 +168,23 @@ def test_all_heuristics(
 
         arr = Manager().list(["" for _ in range(total_iterations)])
 
-        p = []
+        jobs = []
+        jobs_running = 0
         for i, type_permutation in enumerate(type_permutations):
-            p.append(Process(target=run_heuristic, args=(arr, i, type_permutation)))
-            p[i].start()
+            p = Process(target=run_heuristic, args=(arr, i, type_permutation))
+            jobs.append(p)
+            p.start()
 
-        for q in p:
-            q.join()
+            jobs_running += 1
+
+            if jobs_running >= MAX_CONCURRENT_PROCESSES:
+                while jobs_running >= MAX_CONCURRENT_PROCESSES:
+                    jobs_running = 0
+                    for p in jobs:
+                        jobs_running += p.is_alive()
+
+        for p in jobs:
+            p.join()
 
         results = [json.loads(arr[i]) for i in range(total_iterations)]
 
